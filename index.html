@@ -110,6 +110,7 @@ pre{white-space:pre-wrap;font:.84rem/1.5 inherit;font-family:inherit;background:
 .lp{left:12px}.nx{right:12px}
 .lx:hover,.ln:hover{background:var(--neon);color:#07090a}
 .pfp img{width:100%;height:100%;border-radius:50%;object-fit:cover;display:block}
+.rv{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 0;border-top:1px solid var(--line)}
 </style>
 </head>
 <body>
@@ -164,7 +165,7 @@ pre{white-space:pre-wrap;font:.84rem/1.5 inherit;font-family:inherit;background:
 
 <section id="p-booking" class="page">
   <h1 class="bt" style="font-size:1.9rem;margin-bottom:6px">Réserver un créneau</h1>
-  <p class="dim" style="margin-bottom:22px">Choisis une date, un horaire, remplis tes infos : ta demande est préparée par e-mail pour J2pics_, qui confirme ensuite la date.</p>
+  <p class="dim" style="margin-bottom:22px">Choisis une date et un horaire : le créneau est bloqué pour tout le monde dès que tu réserves, et tu retrouves ta réservation plus bas pour l’annuler si besoin.</p>
   <div class="split">
     <div class="card">
       <div class="ct"><button class="ar" onclick="mv(-1)" aria-label="Mois précédent">‹</button><strong id="ctitle" style="text-transform:capitalize"></strong><button class="ar" onclick="mv(1)" aria-label="Mois suivant">›</button></div>
@@ -182,16 +183,17 @@ pre{white-space:pre-wrap;font:.84rem/1.5 inherit;font-family:inherit;background:
         <label for="fc">Instagram ou téléphone</label><input id="fc" placeholder="@pseudo ou 06…" required>
         <label for="fl">Lieu du match / shooting</label><input id="fl" placeholder="Gymnase / stade à Paris" required>
         <div id="err" class="err" role="alert"></div>
-        <button class="btn" style="width:100%;margin-top:6px" type="submit">Préparer ma demande</button>
+        <button class="btn" style="width:100%;margin-top:6px" type="submit">Réserver ce créneau</button>
       </form>
       <div id="done" hidden>
-        <p style="font-weight:800;margin-top:14px">Ta demande est prête ✅ Appuie sur « Envoyer » dans ton e-mail pour la valider.</p>
+        <p style="font-weight:800;margin-top:14px">Ta réservation est enregistrée ✅ Appuie sur « Envoyer » dans ton e-mail pour que J2pics_ la confirme.</p>
         <pre id="msg"></pre>
         <div class="row"><a id="mail" class="btn" style="flex:1">✉️ Envoyer par e-mail</a><a class="btn ghost" style="flex:1" href="https://ig.me/m/j2pics_" target="_blank" rel="noopener">📸 DM Instagram</a></div>
         <button class="btn ghost" style="width:100%;margin-top:10px" onclick="cp()" id="cpb">Copier le message</button>
       </div>
     </div>
   </div>
+<div class="card" style="margin-top:20px"><h3 style="margin-bottom:6px">Mes réservations</h3><p id="demo" class="dim" style="font-size:.82rem;margin-bottom:8px" hidden>⚠️ Mode démo : les réservations ne sont pas encore partagées entre les visiteurs.</p><div id="minel"></div></div>
 </section>
 
 <section id="p-ai" class="page"><div class="card info">
@@ -223,10 +225,10 @@ function go(n){
   document.querySelectorAll("[data-p]").forEach(b=>b.classList.toggle("on",b.dataset.p===n));
   scrollTo(0,0);
   if(location.hash!=="#"+n)location.hash=n;
-  if(n==="booking")draw();
+  if(n==="booking")load();
 }
 addEventListener("hashchange",()=>go(location.hash.slice(1)));
-function mv(d){M+=d;if(M>11){M=0;Y++}if(M<0){M=11;Y--}draw()}
+function mv(d){M+=d;if(M>11){M=0;Y++}if(M<0){M=11;Y--}load()}
 const key=(y,m,d)=>`${y}-${String(m+1).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
 
 function draw(){
@@ -257,16 +259,82 @@ function slots(){
   });
 }
 const v=id=>$(id).value.trim();
-function send(e){
+let live=false,DEMO={};
+try{DEMO=JSON.parse(localStorage.getItem("j2_demo")||"{}")}catch(e){}
+const sv=()=>{try{localStorage.setItem("j2_demo",JSON.stringify(DEMO))}catch(e){}};
+const LOC={
+  async taken(a,b){return Object.values(DEMO).filter(x=>x.date>=a&&x.date<=b)},
+  async book(d,i){const id=d+"_"+i;if(DEMO[id])return false;DEMO[id]={date:d,slot:i};sv();return true},
+  async mine(){return Object.entries(DEMO).map(([id,x])=>({id,...x}))},
+  async cancel(id){delete DEMO[id];sv()}
+};
+let api=LOC;
+const FB={apiKey:"AIzaSyAVTVOpYLDATVBJrGF7jUKX5vK6sO-Bt98",authDomain:"j2pics.firebaseapp.com",projectId:"j2pics",appId:"1:126273036224:web:54c73a2d91a02f4a417225"}; // config Firebase du projet j2pics
+async function initFB(){
+  if(!FB.apiKey)return;
+  try{
+    const u=n=>`https://www.gstatic.com/firebasejs/10.14.1/firebase-${n}.js`;
+    const [A,H,S]=await Promise.all([import(u("app")),import(u("auth")),import(u("firestore"))]);
+    const app=A.initializeApp(FB),au=H.getAuth(app),db=S.getFirestore(app);
+    await H.signInAnonymously(au);
+    const uid=au.currentUser.uid,col=S.collection(db,"slots");
+    api={
+      async taken(a,b){return (await S.getDocs(S.query(col,S.where("date",">=",a),S.where("date","<=",b)))).docs.map(d=>d.data())},
+      async book(d,i){try{await S.setDoc(S.doc(db,"slots",d+"_"+i),{uid,date:d,slot:i});return true}catch(e){return e.code==="permission-denied"?false:null}},
+      async mine(){return (await S.getDocs(S.query(col,S.where("uid","==",uid)))).docs.map(d=>({id:d.id,...d.data()}))},
+      async cancel(id){await S.deleteDoc(S.doc(db,"slots",id))}
+    };
+    live=true;
+  }catch(e){console.error(e)}
+}
+async function refresh(){
+  try{
+    const t=await api.taken(key(Y,M,1),key(Y,M,31));
+    for(const k in BUSY)delete BUSY[k];
+    t.forEach(x=>(BUSY[x.date]=BUSY[x.date]||[]).push(SLOTS[x.slot]));
+  }catch(e){}
+  $("demo").hidden=live;
+  await renderMine();
+}
+async function load(){await refresh();draw()}
+async function renderMine(){
+  let L=[];try{L=await api.mine()}catch(e){}
+  const box=$("minel");box.innerHTML="";
+  L.sort((x,y)=>x.date.localeCompare(y.date));
+  if(!L.length){const p=document.createElement("p");p.className="dim";p.style.fontSize=".88rem";p.textContent="Aucune réservation sur cet appareil.";box.appendChild(p);return}
+  L.forEach(r=>{
+    let det={};try{det=JSON.parse(localStorage.getItem("j2d_"+r.id)||"{}")}catch(e){}
+    const [y,m,d]=r.date.split("-").map(Number),row=document.createElement("div"),t=document.createElement("div"),b=document.createElement("b"),s=document.createElement("div"),x=document.createElement("button");
+    row.className="rv";b.style.textTransform="capitalize";
+    b.textContent=new Date(y,m-1,d).toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"})+" • "+SLOTS[r.slot];
+    s.className="dim";s.style.fontSize=".84rem";s.textContent=[det.presta,det.place].filter(Boolean).join(" — ");
+    x.className="btn ghost";x.textContent="Annuler";x.onclick=()=>cancel(r.id,det);
+    t.append(b,s);row.append(t,x);box.appendChild(row);
+  });
+}
+function mailto(sub,body){const a=document.createElement("a");a.href=`mailto:${MAIL}?subject=${encodeURIComponent(sub)}&body=${encodeURIComponent(body)}`;a.click()}
+async function cancel(id,det){
+  if(!confirm("Annuler cette réservation ? Le créneau sera libéré."))return;
+  try{await api.cancel(id)}catch(e){alert("Annulation impossible, réessaie dans un instant.");return}
+  try{localStorage.removeItem("j2d_"+id)}catch(e){}
+  const [d,i]=id.split("_");
+  mailto("Annulation J2pics_ – "+d,`Salut J2pics_ ! J’annule ma réservation du ${d} (${SLOTS[i]}).\n• Nom / équipe : ${det.name||""}`);
+  await load();
+}
+async function send(e){
   e.preventDefault();
   if(!pd||!ps){$("err").textContent="Choisis une date et un créneau horaire.";return}
   $("err").textContent="";
+  const i=SLOTS.indexOf(ps),ok=await api.book(pd,i);
+  if(ok!==true){$("err").textContent=ok===false?"Ce créneau vient d’être pris. Choisis-en un autre.":"Connexion impossible, réessaie dans un instant.";ps=null;await load();return}
+  try{localStorage.setItem("j2d_"+pd+"_"+i,JSON.stringify({presta:v("fp"),place:v("fl"),name:v("fn")}))}catch(e){}
   const m=`Salut J2pics_ ! Je souhaite réserver :\n• Date : ${plab}\n• Créneau : ${ps}\n• Prestation : ${v("fp")}\n• Nom / équipe : ${v("fn")}\n• Contact : ${v("fc")}\n• Lieu : ${v("fl")}`;
   $("msg").textContent=m;
   $("mail").href=`mailto:${MAIL}?subject=${encodeURIComponent("Réservation J2pics_ – "+pd)}&body=${encodeURIComponent(m)}`;
   $("done").hidden=false;
   $("mail").click();
   $("done").scrollIntoView({behavior:"smooth",block:"nearest"});
+  ps=null;await load();
 }
 async function cp(){
   try{await navigator.clipboard.writeText($("msg").textContent);$("cpb").textContent="Copié ✓"}
@@ -284,6 +352,7 @@ let tx=0;
 $("lb").addEventListener("touchstart",e=>{tx=e.touches[0].clientX},{passive:true});
 $("lb").addEventListener("touchend",e=>{const d=e.changedTouches[0].clientX-tx;if(Math.abs(d)>50)step(d<0?1:-1)});
 go(location.hash.slice(1)||"hub");
+initFB().then(load);
 </script>
 </body>
 </html>
